@@ -7,7 +7,7 @@ import axios from "axios";
 import { query } from "@/lib/db";
 import { NextResponse } from "next/server";
 
-export async function GET(request: Request) {
+export async function POST(request: Request) {
 	try {
 		const { searchParams } = new URL(request.url);
 
