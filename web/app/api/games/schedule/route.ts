@@ -1,30 +1,58 @@
 // SHL Website: https://www.shl.se/api/sports-v2/game-schedule
-// Returns game schedule filtered by season, series, game type, location, and played status
+// Fetches and saves game schedule to bronze.shl_game_schedule
+// Defaults to current season, SHL series, and regular game type if not provided
 // Note: This is an undocumented API and may change without notice
 
 import axios from "axios";
+import { query } from "@/lib/db";
 import { NextResponse } from "next/server";
 
 export async function GET(request: Request) {
-	const { searchParams } = new URL(request.url);
-
-	const seasonUuid = searchParams.get("seasonUuid");
-	const seriesUuid = searchParams.get("seriesUuid");
-	const gameTypeUuid = searchParams.get("gameTypeUuid");
-	const gamePlace = searchParams.get("gamePlace") || "all";
-	const played = searchParams.get("played") || "all";
-
-	if (!seasonUuid || !seriesUuid || !gameTypeUuid) {
-		return NextResponse.json(
-			{
-				error:
-					"Missing required parameters: seasonUuid, seriesUuid, gameTypeUuid",
-			},
-			{ status: 400 },
-		);
-	}
-
 	try {
+		const { searchParams } = new URL(request.url);
+
+		let seasonUuid = searchParams.get("seasonUuid");
+		if (!seasonUuid) {
+			const result = await query<{ season_uuid: string }>(
+				"SELECT season_uuid FROM reference.seasons WHERE is_current = true LIMIT 1",
+			);
+			if (result.length === 0) {
+				return NextResponse.json(
+					{ error: "No current season found in database. Run /api/reference/sync first." },
+					{ status: 400 },
+				);
+			}
+			seasonUuid = result[0].season_uuid;
+		}
+
+		let seriesUuid = searchParams.get("seriesUuid");
+		if (!seriesUuid) {
+			const result = await query<{ series_uuid: string }>(
+				"SELECT series_uuid FROM reference.series WHERE code = 'SHL' LIMIT 1",
+			);
+			if (result.length === 0) {
+				return NextResponse.json(
+					{ error: "No SHL series found in database. Run /api/reference/sync first." },
+					{ status: 400 },
+				);
+			}
+			seriesUuid = result[0].series_uuid;
+		}
+
+		let gameTypeUuid = searchParams.get("gameTypeUuid");
+		if (!gameTypeUuid) {
+			const result = await query<{ game_type_uuid: string }>(
+				"SELECT game_type_uuid FROM reference.game_types WHERE code = 'regular' LIMIT 1",
+			);
+			if (result.length === 0) {
+				return NextResponse.json(
+					{ error: "No regular game type found in database. Run /api/reference/sync first." },
+					{ status: 400 },
+				);
+			}
+			gameTypeUuid = result[0].game_type_uuid;
+		}
+
 		const response = await axios.get(
 			`https://www.shl.se/api/sports-v2/game-schedule`,
 			{
@@ -32,8 +60,6 @@ export async function GET(request: Request) {
 					seasonUuid,
 					seriesUuid,
 					gameTypeUuid,
-					gamePlace,
-					played,
 				},
 				timeout: 10000,
 			},
@@ -48,7 +74,13 @@ export async function GET(request: Request) {
 			);
 		}
 
-		// TODO: Save to database
+		await query(
+			`INSERT INTO bronze.shl_game_schedule (season_uuid, raw_data)
+			 VALUES ($1, $2)
+			 ON CONFLICT (season_uuid) 
+			 DO UPDATE SET raw_data = EXCLUDED.raw_data, updated_at = NOW()`,
+			[seasonUuid, JSON.stringify(data)],
+		);
 
 		const gameCount = Array.isArray(data.gameInfo) 
 			? data.gameInfo.length 
@@ -56,7 +88,10 @@ export async function GET(request: Request) {
 
 		return NextResponse.json({
 			success: true,
-			message: `Fetched ${gameCount} games from schedule`,
+			message: `Fetched and saved ${gameCount} games to bronze.shl_game_schedule`,
+			seasonUuid,
+			seriesUuid,
+			gameTypeUuid,
 			timestamp: new Date().toISOString(),
 		});
 	} catch (error) {
@@ -69,8 +104,11 @@ export async function GET(request: Request) {
 			);
 		}
 		return NextResponse.json(
-			{ error: "Internal server error" },
+			{
+				error: error instanceof Error ? error.message : "Internal server error",
+			},
 			{ status: 500 },
 		);
 	}
 }
+
