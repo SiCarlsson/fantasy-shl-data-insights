@@ -35,7 +35,7 @@ interface SHLFilterResponse {
 	};
 }
 
-export async function GET() {
+export async function POST() {
 	try {
 		const response = await axios.get<SHLFilterResponse>(
 			"https://www.shl.se/api/sports-v2/season-series-game-types-filter",
